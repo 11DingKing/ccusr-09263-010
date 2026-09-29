@@ -5,8 +5,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from .errors import BusinessRuleError, ValidationError
+from .errors import BusinessRuleError, ValidationError, VenueBlockedError
 from .models import (
     QTY_EPS,
     Booking,
@@ -16,6 +17,7 @@ from .models import (
     Mentor,
     PlannedAllocation,
     ReceptionWindow,
+    VenueBlockout,
     WorkshopResource,
 )
 
@@ -23,6 +25,17 @@ from .models import (
 def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
     """半开区间重叠判断。"""
     return a_start < b_end and b_start < a_end
+
+
+def venue_wallclock(value: datetime, tz: str) -> datetime:
+    """把带时区时刻投影到场地时区的墙上时钟（返回朴素时间）。
+
+    跨夏令时切换的判断必须基于场地自身时区：投影后比较朴素墙上时钟，
+    而不能使用服务器本地时间或固定 UTC 偏移。
+    """
+    if value.tzinfo is None:
+        raise ValueError("datetime must be timezone-aware")
+    return value.astimezone(ZoneInfo(tz)).replace(tzinfo=None)
 
 
 def ensure_slot_shape(package: CoursePackage, slot_start: datetime, slot_end: datetime) -> None:
@@ -62,6 +75,49 @@ def ensure_window_fit(window: ReceptionWindow, slot_start: datetime, slot_end: d
                 "window_id": window.window_id,
                 "window_start": window.start.isoformat(),
                 "window_end": window.end.isoformat(),
+            },
+        )
+
+
+def find_blockout(
+    slot_start: datetime,
+    slot_end: datetime,
+    blockouts: list[VenueBlockout],
+) -> VenueBlockout | None:
+    """在场地时区禁用窗口中找出与时段重叠者；按场地时区的墙上时钟判定。
+
+    输入时段为带时区（UTC）时刻，先投影到每个禁用窗口所属场地时区的
+    朴素墙上时钟，再做半开区间重叠比较。夏令时切换日（春季缺口、秋季
+    重叠）也按墙上时钟语义处理，绝不使用服务器本地时间。
+    """
+    for blockout in blockouts:
+        local_start = venue_wallclock(slot_start, blockout.tz)
+        local_end = venue_wallclock(slot_end, blockout.tz)
+        if overlaps(local_start, local_end, blockout.local_start, blockout.local_end):
+            return blockout
+    return None
+
+
+def ensure_slot_not_blocked(
+    slot_start: datetime,
+    slot_end: datetime,
+    blockouts: list[VenueBlockout],
+) -> None:
+    """时段不得与任何场地时区禁用窗口重叠，否则给出带原始本地时段的拒绝原因。"""
+    blockout = find_blockout(slot_start, slot_end, blockouts)
+    if blockout is not None:
+        raise VenueBlockedError(
+            "slot overlaps a venue blockout window maintained in the venue timezone",
+            details={
+                "blockout_id": blockout.blockout_id,
+                "resource_id": blockout.resource_id,
+                "venue_tz": blockout.tz,
+                # 原样回传管理员登记的本地时段（朴素墙上时钟），不做偏移换算
+                "blockout_local_start": blockout.local_start.isoformat(),
+                "blockout_local_end": blockout.local_end.isoformat(),
+                "blockout_reason": blockout.reason,
+                "slot_venue_local_start": venue_wallclock(slot_start, blockout.tz).isoformat(),
+                "slot_venue_local_end": venue_wallclock(slot_end, blockout.tz).isoformat(),
             },
         )
 

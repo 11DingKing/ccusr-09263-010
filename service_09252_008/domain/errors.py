@@ -61,3 +61,13 @@ class BookingImmutableError(StateError):
     """预约已不可变更（材料已发运或流程已终结）。"""
 
     code = "booking_immutable"
+
+
+class VenueBlockedError(BusinessRuleError):
+    """申请时段撞上场地管理员登记的“场地时区禁用窗口”。
+
+    判定一律按场地自身时区的墙上时钟进行，与服务器本地时区无关；
+    ``details`` 中携带管理员登记的原始本地时段，便于明确拒绝原因。
+    """
+
+    code = "venue_blocked"

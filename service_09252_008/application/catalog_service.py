@@ -12,8 +12,10 @@ from ..domain.models import (
     MaterialSafety,
     Mentor,
     ReceptionWindow,
+    VenueBlockout,
     WorkshopResource,
     dt_from_str,
+    local_dt_from_str,
 )
 from ..persistence.store import Store
 from .ports import Clock, IdGenerator
@@ -23,6 +25,7 @@ COLLECTION_MENTORS = "mentors"
 COLLECTION_RESOURCES = "resources"
 COLLECTION_BATCHES = "material_batches"
 COLLECTION_WINDOWS = "reception_windows"
+COLLECTION_BLOCKOUTS = "venue_blockouts"
 
 
 def _require(data: dict[str, Any], field: str) -> Any:
@@ -83,6 +86,18 @@ def _require_time(data: dict[str, Any], field: str):
         return dt_from_str(value)
     except ValueError as exc:
         raise ValidationError(f"field {field} must be an ISO-8601 datetime with offset: {exc}") from exc
+
+
+def _require_local_time(data: dict[str, Any], field: str):
+    """场地本地墙上时钟：必须是不带任何时区偏移的 ISO 时间。"""
+    value = _require(data, field)
+    try:
+        return local_dt_from_str(value)
+    except (ValueError, TypeError) as exc:
+        raise ValidationError(
+            f"field {field} must be a naive ISO-8601 datetime in venue local time (no offset): {exc}",
+            details={"field": field},
+        ) from exc
 
 
 class CatalogService:
@@ -205,6 +220,57 @@ class CatalogService:
         with self._store.transaction():
             self._store.put(COLLECTION_WINDOWS, window.window_id, window.to_dict())
         return window.to_dict()
+
+    # -- 场地时区禁用窗口 --------------------------------------------------
+
+    def create_venue_blockout(self, data: dict[str, Any]) -> dict[str, Any]:
+        """登记场地禁用窗口。
+
+        时段 ``local_start`` / ``local_end`` 为场地时区的墙上时钟（朴素
+        ISO 时间，不带偏移）；场地时区取自资源登记的 ``tz``，不允许载荷
+        另传，确保日历始终绑定场地自身时区，绝不以服务器本地时间代替。
+        """
+        resource_id = _require_str(data, "resource_id")
+        resource_record = self._store.get(COLLECTION_RESOURCES, resource_id)
+        if resource_record is None:
+            raise NotFoundError(
+                f"resource not found: {resource_id}", details={"resource_id": resource_id}
+            )
+        venue_tz = resource_record["tz"]
+        local_start = _require_local_time(data, "local_start")
+        local_end = _require_local_time(data, "local_end")
+        if local_end <= local_start:
+            raise ValidationError("blockout local_end must be after local_start")
+        reason = data.get("reason", "")
+        if not isinstance(reason, str):
+            raise ValidationError("field reason must be a string")
+        blockout = VenueBlockout(
+            blockout_id=self._ids.new_id("blk"),
+            resource_id=resource_id,
+            tz=venue_tz,
+            local_start=local_start,
+            local_end=local_end,
+            reason=reason.strip(),
+            created_at=self._clock.now(),
+        )
+        with self._store.transaction():
+            self._store.put(COLLECTION_BLOCKOUTS, blockout.blockout_id, blockout.to_dict())
+        return blockout.to_dict()
+
+    def list_venue_blockouts(self, resource_id: str | None = None) -> list[dict[str, Any]]:
+        if resource_id is None:
+            return self._store.query(COLLECTION_BLOCKOUTS)
+        return self._store.query(COLLECTION_BLOCKOUTS, resource_id=resource_id)
+
+    def delete_venue_blockout(self, blockout_id: str) -> dict[str, Any]:
+        record = self._store.get(COLLECTION_BLOCKOUTS, blockout_id)
+        if record is None:
+            raise NotFoundError(
+                f"venue blockout not found: {blockout_id}", details={"blockout_id": blockout_id}
+            )
+        with self._store.transaction():
+            self._store.delete(COLLECTION_BLOCKOUTS, blockout_id)
+        return {"deleted": blockout_id}
 
     # -- 查询 --------------------------------------------------------------
 

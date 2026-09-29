@@ -40,6 +40,23 @@ def dt_from_str(text: str) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def local_dt_to_str(value: datetime) -> str:
+    """把场地本地墙上时钟（朴素时间）序列化为 ISO 字符串。"""
+    if value.tzinfo is not None:
+        raise ValueError("local datetime must be naive (venue wall-clock time)")
+    return value.isoformat()
+
+
+def local_dt_from_str(text: str) -> datetime:
+    """解析场地本地墙上时钟；必须是不带时区偏移的朴素时间。"""
+    if not isinstance(text, str):
+        raise ValueError(f"expected ISO datetime string, got {type(text).__name__}")
+    value = datetime.fromisoformat(text.strip())
+    if value.tzinfo is not None:
+        raise ValueError("local datetime string must not carry a timezone offset")
+    return value
+
+
 # ---------------------------------------------------------------------------
 # 枚举
 # ---------------------------------------------------------------------------
@@ -313,6 +330,49 @@ class ReceptionWindow:
             end=dt_from_str(data["end"]),
             capacity=int(data["capacity"]),
             allowed_safety=MaterialSafety(int(data["allowed_safety"])),
+        )
+
+
+@dataclass
+class VenueBlockout:
+    """场地时区禁用窗口：场地管理员维护的本地日历中的停用时段。
+
+    时段以场地时区的**墙上时钟**表达（朴素 ``datetime`` + IANA 时区名），
+    不接受、也不换算成服务器本地时间或固定偏移。这样跨夏令时切换日的
+    “22:00-23:00”仍指当地 22 点，而不会被服务器时区或固定 UTC 偏移带偏。
+
+    持久化时保存原始本地时段字符串，错误响应据此原样返回给调用方。
+    """
+
+    blockout_id: str
+    resource_id: str
+    tz: str
+    local_start: datetime  # 场地本地墙上时钟（朴素）
+    local_end: datetime  # 场地本地墙上时钟（朴素）
+    reason: str
+    created_at: datetime
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "blockout_id": self.blockout_id,
+            "resource_id": self.resource_id,
+            "tz": self.tz,
+            "local_start": local_dt_to_str(self.local_start),
+            "local_end": local_dt_to_str(self.local_end),
+            "reason": self.reason,
+            "created_at": dt_to_str(self.created_at),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VenueBlockout":
+        return cls(
+            blockout_id=data["blockout_id"],
+            resource_id=data["resource_id"],
+            tz=data["tz"],
+            local_start=local_dt_from_str(data["local_start"]),
+            local_end=local_dt_from_str(data["local_end"]),
+            reason=data["reason"],
+            created_at=dt_from_str(data["created_at"]),
         )
 
 

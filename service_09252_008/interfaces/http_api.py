@@ -27,12 +27,14 @@ from ..domain.errors import (
     NotFoundError,
     StateError,
     ValidationError,
+    VenueBlockedError,
 )
 
 _ERROR_STATUS = {
     NotFoundError.code: 404,
     ValidationError.code: 400,
     BusinessRuleError.code: 422,
+    VenueBlockedError.code: 422,
     StateError.code: 409,
     ConflictError.code: 409,
     IdempotencyConflict.code: 409,
@@ -76,6 +78,14 @@ def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
     router.add("POST", "/resources", lambda body, hdr: catalog.create_resource(body))
     router.add("POST", "/material-batches", lambda body, hdr: catalog.create_material_batch(body))
     router.add("POST", "/reception-windows", lambda body, hdr: catalog.create_reception_window(body))
+    # 场地时区禁用窗口：管理员维护的场地本地日历
+    router.add("POST", "/venue-blockouts", lambda body, hdr: catalog.create_venue_blockout(body))
+    router.add("GET", "/venue-blockouts", lambda body, hdr: {"items": catalog.list_venue_blockouts()})
+    router.add(
+        "DELETE",
+        "/venue-blockouts/{blockout_id}",
+        lambda body, hdr: catalog.delete_venue_blockout(hdr["__path__"]["blockout_id"]),
+    )
     router.add("GET", "/packages", lambda body, hdr: {"items": catalog.list(COLLECTION_PACKAGES)})
     router.add("GET", "/mentors", lambda body, hdr: {"items": catalog.list(COLLECTION_MENTORS)})
     router.add("GET", "/resources", lambda body, hdr: {"items": catalog.list(COLLECTION_RESOURCES)})
@@ -191,6 +201,9 @@ def make_handler_class(router: _Router) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             self._dispatch("POST")
+
+        def do_DELETE(self) -> None:
+            self._dispatch("DELETE")
 
     return ApiHandler
 

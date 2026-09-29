@@ -44,12 +44,14 @@ from ..domain.models import (
     Settlement,
     Shipment,
     ShipmentStatus,
+    VenueBlockout,
     WorkshopResource,
     dt_to_str,
 )
 from ..domain.rules import (
     ensure_mentor_qualified,
     ensure_resource_fit,
+    ensure_slot_not_blocked,
     ensure_slot_shape,
     ensure_window_fit,
     find_resource_conflict,
@@ -59,6 +61,7 @@ from ..domain.rules import (
 from ..persistence.store import Store
 from .catalog_service import (
     COLLECTION_BATCHES,
+    COLLECTION_BLOCKOUTS,
     COLLECTION_MENTORS,
     COLLECTION_PACKAGES,
     COLLECTION_RESOURCES,
@@ -205,6 +208,13 @@ class BookingService:
     def _save_batch(self, batch: MaterialBatch) -> None:
         self._store.put(COLLECTION_BATCHES, batch.batch_id, batch.to_dict())
 
+    def _blockouts_for(self, resource_id: str) -> list[VenueBlockout]:
+        """该场地上管理员维护的时区禁用窗口。"""
+        return [
+            VenueBlockout.from_dict(r)
+            for r in self._store.query(COLLECTION_BLOCKOUTS, resource_id=resource_id)
+        ]
+
     def _reservations_of(self, booking_id: str) -> list[MaterialReservation]:
         return [
             MaterialReservation.from_dict(r)
@@ -263,6 +273,8 @@ class BookingService:
         ensure_window_fit(window, slot_start, slot_end)
         ensure_mentor_qualified(mentor, package, slot_end)
         ensure_resource_fit(resource, seats)
+        # 场地管理员维护的时区禁用窗口：按场地时区墙上时钟硬拒绝
+        ensure_slot_not_blocked(slot_start, slot_end, self._blockouts_for(resource.resource_id))
 
         batches = [MaterialBatch.from_dict(b) for b in self._store.query(COLLECTION_BATCHES)]
         plan = plan_material_allocation(
@@ -482,6 +494,8 @@ class BookingService:
         ensure_slot_shape(package, slot_start, slot_end)
         ensure_window_fit(window, slot_start, slot_end)
         ensure_mentor_qualified(mentor, package, slot_end)
+        # 改期同样受场地时区禁用窗口约束（按场地时区墙上时钟硬拒绝）
+        ensure_slot_not_blocked(slot_start, slot_end, self._blockouts_for(resource.resource_id))
         batches = [MaterialBatch.from_dict(b) for b in self._store.query(COLLECTION_BATCHES)]
         plan = plan_material_allocation(
             package,

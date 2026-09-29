@@ -37,6 +37,11 @@ service_09252_008/
 - **超时恢复**：过期锁定释放库存并晋级候补，过期报价退回待报价；
   服务启动时与 `POST /admin/recover` 均可触发。
 - **时间**：内部一律 UTC；输入接受任意 ISO-8601 偏移（拒绝朴素时间）。
+- **场地时区禁用窗口**：场地管理员维护本地日历中的停用时段，按**场地时区的
+  墙上时钟**登记（朴素本地时间 + 资源的 IANA 时区），绝不用服务器本地时间或
+  固定偏移代替。申请/改期时段与之重叠时硬拒绝（`venue_blocked`，HTTP 422），
+  错误详情原样携带登记的本地时段与场地时区；跨夏令时切换（春季缺口、秋季
+  重复小时）同样按场地墙上时钟判定。
 
 ## 运行
 
@@ -51,6 +56,7 @@ python3 -m service_09252_008 --host 127.0.0.1 --port 8080
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/packages` `/mentors` `/resources` `/material-batches` `/reception-windows` | 目录登记 |
+| POST/GET/DELETE | `/venue-blockouts` | 场地时区禁用窗口（朴素本地时段，时区取自资源） |
 | POST | `/bookings` | 申请（需幂等键） |
 | POST | `/bookings/{id}/quote` | 报价 |
 | POST | `/bookings/{id}/lock` | 锁定（需幂等键，可带 `ttl_seconds`） |
@@ -74,6 +80,7 @@ python3 -m unittest discover -s tests -v
 ```
 
 覆盖：主流程端到端、前置培训/容量/安全/互斥/运输周期规则、跨时区、
+场地时区禁用窗口（跨春令时/秋令时边界、服务器时区无关、SQLite 重启持久化）、
 幂等重放、并发锁定（内存与 SQLite 双后端）、重启后超时恢复、
 部分到货与在途损耗、取消释放候补与损耗记录、HTTP 接口边界。
 

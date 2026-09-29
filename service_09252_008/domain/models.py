@@ -277,6 +277,66 @@ class MaterialBatch:
         )
 
 
+@dataclass(frozen=True)
+class VenueBlackoutWindow:
+    """场地时区禁用窗口：场地管理员按场地本地日历维护的闭馆时段。
+
+    - ``start_local`` / ``end_local`` 是场地时区（``tz``，IANA）下的**挂钟时间**，
+      朴素 ``datetime``、不带任何偏移：禁用窗口按场地时区定义，绝不允许用
+      服务器本地时间代替；
+    - ``start_utc`` / ``end_utc`` 是按场地时区（含夏令时规则）解析出的 UTC 边界，
+      仅用于持久化与半开区间求交，属于派生值；
+    - 春季拨快造成的不存在时间夹紧到切换后的第一个有效时刻
+      （``start_gap_adjusted`` 记录是否发生过夹紧）；秋季拨回的重复时刻取第一次
+      出现。跨夏令时切换的窗口因此得到正确的物理时长（如本地 01:30-03:30
+      跨春季拨快时物理长度为 1 小时）。
+    """
+
+    blackout_id: str
+    resource_id: str
+    reason: str
+    tz: str
+    start_local: datetime  # 朴素挂钟时间（场地本地）
+    end_local: datetime  # 朴素挂钟时间（场地本地，开区间右端）
+    start_utc: datetime
+    end_utc: datetime
+    start_gap_adjusted: bool = False
+    end_gap_adjusted: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "blackout_id": self.blackout_id,
+            "resource_id": self.resource_id,
+            "reason": self.reason,
+            "tz": self.tz,
+            "start_local": self.start_local.isoformat(),
+            "end_local": self.end_local.isoformat(),
+            "start_utc": dt_to_str(self.start_utc),
+            "end_utc": dt_to_str(self.end_utc),
+            "start_gap_adjusted": self.start_gap_adjusted,
+            "end_gap_adjusted": self.end_gap_adjusted,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VenueBlackoutWindow":
+        start_local = datetime.fromisoformat(data["start_local"])
+        end_local = datetime.fromisoformat(data["end_local"])
+        if start_local.tzinfo is not None or end_local.tzinfo is not None:
+            raise ValueError("blackout local bounds must be naive venue-local wall times")
+        return cls(
+            blackout_id=data["blackout_id"],
+            resource_id=data["resource_id"],
+            reason=data["reason"],
+            tz=data["tz"],
+            start_local=start_local,
+            end_local=end_local,
+            start_utc=dt_from_str(data["start_utc"]),
+            end_utc=dt_from_str(data["end_utc"]),
+            start_gap_adjusted=bool(data.get("start_gap_adjusted", False)),
+            end_gap_adjusted=bool(data.get("end_gap_adjusted", False)),
+        )
+
+
 @dataclass
 class ReceptionWindow:
     """接待窗口：院校对外开放承接课程的时间段。"""

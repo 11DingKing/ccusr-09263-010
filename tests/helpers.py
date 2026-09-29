@@ -7,6 +7,7 @@ from typing import Any
 from service_09252_008.application.booking_service import BookingService
 from service_09252_008.application.catalog_service import CatalogService
 from service_09252_008.application.ports import ManualClock, SequentialIdGenerator
+from service_09252_008.application.venue_calendar_service import VenueCalendarService
 from service_09252_008.persistence.store import InMemoryStore, Store
 
 NOW = datetime(2026, 9, 25, 0, 0, 0, tzinfo=timezone.utc)
@@ -32,6 +33,11 @@ def make_services(
     return catalog, bookings, clock, store
 
 
+def make_calendar(store: Store, clock: ManualClock) -> VenueCalendarService:
+    """构建场地日历服务（独立序列 ID，与预约服务共用同一存储）。"""
+    return VenueCalendarService(store, clock, SequentialIdGenerator())
+
+
 def seed_catalog(
     catalog: CatalogService,
     *,
@@ -40,12 +46,14 @@ def seed_catalog(
     resource_capacity: int = 30,
     resource_safety: int = 2,
     mutex_group: str | None = None,
+    resource_tz: str = "Asia/Shanghai",
     mentor_qual_valid_until: str = "2027-01-01T00:00:00+00:00",
     dye_lead_time_seconds: int = 0,
     dye_cross_border: bool = False,
     dye_quantity: float = 100.0,
     cloth_quantity: float = 100.0,
     dye_safety: int = 2,
+    window_tz: str = "Asia/Shanghai",
     window_start: str = "2026-10-01T09:00:00+08:00",
     window_end: str = "2026-10-01T17:00:00+08:00",
 ) -> dict[str, Any]:
@@ -77,7 +85,7 @@ def seed_catalog(
             "capacity": resource_capacity,
             "safety_rating": resource_safety,
             "mutex_group": mutex_group,
-            "tz": "Asia/Shanghai",
+            "tz": resource_tz,
             "hourly_fee_cents": 5000,
         }
     )
@@ -104,7 +112,7 @@ def seed_catalog(
     window = catalog.create_reception_window(
         {
             "institution": "城南大学",
-            "tz": "Asia/Shanghai",
+            "tz": window_tz,
             "start": window_start,
             "end": window_end,
             "capacity": window_capacity,

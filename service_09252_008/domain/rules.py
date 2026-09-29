@@ -16,6 +16,7 @@ from .models import (
     Mentor,
     PlannedAllocation,
     ReceptionWindow,
+    VenueBlackoutWindow,
     WorkshopResource,
 )
 
@@ -188,3 +189,49 @@ def find_resource_conflict(
         if overlaps(candidate.slot_start, candidate.slot_end, other.slot_start, other.slot_end):
             return other
     return None
+
+
+def find_blackout_conflict(
+    slot_start: datetime,
+    slot_end: datetime,
+    blackouts: list[VenueBlackoutWindow],
+) -> VenueBlackoutWindow | None:
+    """找出与候选时段（半开区间、UTC）相交的场地禁用窗口。
+
+    禁用窗口的 UTC 边界由场地本地挂钟时间解析得到，跨夏令时切换时物理时长
+    已经正确，因此这里直接做半开区间求交，不依赖服务器本地时间。
+    """
+    for blackout in blackouts:
+        if overlaps(slot_start, slot_end, blackout.start_utc, blackout.end_utc):
+            return blackout
+    return None
+
+
+def ensure_not_blacked_out(
+    slot_start: datetime,
+    slot_end: datetime,
+    blackouts: list[VenueBlackoutWindow],
+) -> None:
+    """候选时段不得与任何场地禁用窗口相交；冲突时硬拒绝并回带原始本地时段。"""
+    blackout = find_blackout_conflict(slot_start, slot_end, blackouts)
+    if blackout is None:
+        return
+    details = {
+        "resource_id": blackout.resource_id,
+        "blackout_id": blackout.blackout_id,
+        "venue_tz": blackout.tz,
+        "blackout_start_local": blackout.start_local.isoformat(),
+        "blackout_end_local": blackout.end_local.isoformat(),
+        "blackout_start_utc": blackout.start_utc.isoformat(),
+        "blackout_end_utc": blackout.end_utc.isoformat(),
+        "blackout_reason": blackout.reason,
+        "slot_start": slot_start.isoformat(),
+        "slot_end": slot_end.isoformat(),
+    }
+    if blackout.start_gap_adjusted or blackout.end_gap_adjusted:
+        # 边界落在春季拨快缺口内被夹紧时显式告知，避免管理员误读原始时段。
+        details["note"] = "blackout boundary falls in a spring-forward gap; UTC bounds were snapped forward"
+    raise BusinessRuleError(
+        "slot is blocked by a venue blackout window defined in the venue timezone",
+        details=details,
+    )

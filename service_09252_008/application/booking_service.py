@@ -44,11 +44,13 @@ from ..domain.models import (
     Settlement,
     Shipment,
     ShipmentStatus,
+    VenueBlackoutWindow,
     WorkshopResource,
     dt_to_str,
 )
 from ..domain.rules import (
     ensure_mentor_qualified,
+    ensure_not_blacked_out,
     ensure_resource_fit,
     ensure_slot_shape,
     ensure_window_fit,
@@ -65,6 +67,7 @@ from .catalog_service import (
     COLLECTION_WINDOWS,
 )
 from .ports import Clock, IdGenerator
+from .venue_calendar_service import COLLECTION_BLACKOUTS
 
 COLLECTION_BOOKINGS = "bookings"
 COLLECTION_RESERVATIONS = "material_reservations"
@@ -217,6 +220,12 @@ class BookingService:
     def _window_bookings(self, window_id: str) -> list[Booking]:
         return [Booking.from_dict(b) for b in self._store.query(COLLECTION_BOOKINGS, window_id=window_id)]
 
+    def _resource_blackouts(self, resource_id: str) -> list[VenueBlackoutWindow]:
+        return [
+            VenueBlackoutWindow.from_dict(r)
+            for r in self._store.query(COLLECTION_BLACKOUTS, resource_id=resource_id)
+        ]
+
     def _all_bookings(self) -> list[Booking]:
         return [Booking.from_dict(b) for b in self._store.query(COLLECTION_BOOKINGS)]
 
@@ -263,6 +272,8 @@ class BookingService:
         ensure_window_fit(window, slot_start, slot_end)
         ensure_mentor_qualified(mentor, package, slot_end)
         ensure_resource_fit(resource, seats)
+        # 场地时区禁用窗口：硬拒绝（不进候补），错误详情回带原始本地时段
+        ensure_not_blacked_out(slot_start, slot_end, self._resource_blackouts(resource.resource_id))
 
         batches = [MaterialBatch.from_dict(b) for b in self._store.query(COLLECTION_BATCHES)]
         plan = plan_material_allocation(
@@ -400,6 +411,10 @@ class BookingService:
                 "resource is held by a conflicting booking",
                 details={"conflict_booking_id": conflict.booking_id, "resource_id": resource.resource_id},
             )
+        # 禁用窗口可能在报价之后才登记：锁定前按最新场地日历复查（硬拒绝）
+        ensure_not_blacked_out(
+            booking.slot_start, booking.slot_end, self._resource_blackouts(resource.resource_id)
+        )
 
         # 依据当前库存重新生成分配计划并预占
         package = self._load_package(booking.package_id)
@@ -482,6 +497,8 @@ class BookingService:
         ensure_slot_shape(package, slot_start, slot_end)
         ensure_window_fit(window, slot_start, slot_end)
         ensure_mentor_qualified(mentor, package, slot_end)
+        # 改期目标时段同样不得落入场地禁用窗口（硬拒绝，回带原始本地时段）
+        ensure_not_blacked_out(slot_start, slot_end, self._resource_blackouts(resource.resource_id))
         batches = [MaterialBatch.from_dict(b) for b in self._store.query(COLLECTION_BATCHES)]
         plan = plan_material_allocation(
             package,

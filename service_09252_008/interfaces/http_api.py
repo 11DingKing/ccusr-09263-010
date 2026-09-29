@@ -19,6 +19,7 @@ from ..application.catalog_service import (
     COLLECTION_WINDOWS,
     CatalogService,
 )
+from ..application.venue_calendar_service import VenueCalendarService
 from ..domain.errors import (
     BusinessRuleError,
     ConflictError,
@@ -61,7 +62,9 @@ class _Router:
         return None
 
 
-def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
+def build_router(
+    catalog: CatalogService, bookings: BookingService, calendar: VenueCalendarService
+) -> _Router:
     router = _Router()
 
     def with_idempotency_key(payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -86,6 +89,24 @@ def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
         "/packages/{package_id}",
         lambda body, hdr: catalog.get(COLLECTION_PACKAGES, hdr["__path__"]["package_id"]),
     )
+
+    # 场地日历：场地管理员维护“场地时区禁用窗口”
+    router.add(
+        "POST",
+        "/resources/{resource_id}/blackouts",
+        lambda body, hdr: calendar.create_blackout(hdr["__path__"]["resource_id"], body),
+    )
+    router.add(
+        "GET",
+        "/resources/{resource_id}/blackouts",
+        lambda body, hdr: {"items": calendar.list_blackouts(hdr["__path__"]["resource_id"])},
+    )
+    router.add(
+        "DELETE",
+        "/venue-blackouts/{blackout_id}",
+        lambda body, hdr: calendar.delete_blackout(hdr["__path__"]["blackout_id"]),
+    )
+    router.add("GET", "/venue-blackouts", lambda body, hdr: {"items": calendar.list_blackouts()})
 
     # 预约流程
     router.add("POST", "/bookings", lambda body, hdr: bookings.apply(with_idempotency_key(body, hdr)))
@@ -192,6 +213,9 @@ def make_handler_class(router: _Router) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             self._dispatch("POST")
 
+        def do_DELETE(self) -> None:
+            self._dispatch("DELETE")
+
     return ApiHandler
 
 
@@ -200,9 +224,10 @@ def create_server(
     port: int,
     catalog: CatalogService,
     bookings: BookingService,
+    calendar: VenueCalendarService,
 ) -> ThreadingHTTPServer:
     """构建线程化 HTTP 服务（守护线程，随进程退出）。"""
-    router = build_router(catalog, bookings)
+    router = build_router(catalog, bookings, calendar)
     server = ThreadingHTTPServer((host, port), make_handler_class(router))
     server.daemon_threads = True
     return server
